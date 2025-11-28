@@ -139,7 +139,7 @@ class CalendarEvent(models.Model):
                     time.second,
                 )
             else:
-                if not self._context.get("caldav_keep_ids"):
+                if not self.env.context.get("caldav_keep_ids"):
                     event.caldav_uid = uuid.uuid4()
                 event.caldav_recurrence_id = False
 
@@ -337,7 +337,7 @@ class CalendarEvent(models.Model):
                 return index
 
     def _sync_unlink_to_caldav(self):
-        delete_all = self._context.get("caldav_delete_all", False)
+        delete_all = self.env.context.get("caldav_delete_all", False)
         if self.caldav_uid:
             for user in self.caldav_user_ids:
                 client = user._get_caldav_client()
