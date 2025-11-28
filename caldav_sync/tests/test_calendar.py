@@ -298,7 +298,7 @@ class TestCalendarEvent(TransactionCase, CaldavTestCommon):
             self.env["calendar.event"].poll_caldav_server()
         notification_method = (
             "odoo.addons.calendar.models.calendar_attendee"
-            ":Attendee._send_mail_to_attendees"
+            ".CalendarAttendee._notify_attendees"
         )
         # Now update it to remove one attendee
         # Shuffle the user polling order just to test more robustly
