@@ -10,6 +10,7 @@
     "name": "CalDAV Synchronization",
     "version": "19.0.0.8.1",
     "license": "LGPL-3",
+    "development_status": "Beta",
     "category": "Productivity",
     "summary": "Synchronize Odoo Calendar Events with CalDAV Servers",
     "author": "Bemade Inc., Odoo Community Association (OCA)",
