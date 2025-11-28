@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import DEFAULT, MagicMock, patch
 
@@ -182,7 +182,7 @@ class TestCalendarEvent(TransactionCase, CaldavTestCommon):
         with _patch_caldav_with_events_from_ics(
             ics_path,
             user,
-            last_modified=(datetime.now(UTC)),
+            last_modified=(datetime.now(timezone.utc)),
         ):
             # Clear any caches to ensure fresh data
             self.env["calendar.event"].invalidate_model()
@@ -237,7 +237,7 @@ class TestCalendarEvent(TransactionCase, CaldavTestCommon):
         event = self.env["calendar.event"].search([("user_id", "=", user.id)])
         ics_path = _get_ics_path("test_multi_attendee_update.ics")
         with _patch_caldav_with_events_from_ics(
-            ics_path, user, last_modified=datetime.now(UTC)
+            ics_path, user, last_modified=datetime.now(timezone.utc)
         ):
             self.env["calendar.event"].poll_caldav_server()
         self.assertEqual(len(event.attendee_ids), 2)
@@ -305,7 +305,7 @@ class TestCalendarEvent(TransactionCase, CaldavTestCommon):
         ics_path = _get_ics_path("test_multi_user_update.ics")
         with (
             _patch_caldav_with_events_from_ics(
-                ics_path, user2, last_modified=datetime.now(UTC)
+                ics_path, user2, last_modified=datetime.now(timezone.utc)
             ),
             patch(notification_method) as mock_notification_method,
         ):
@@ -313,7 +313,7 @@ class TestCalendarEvent(TransactionCase, CaldavTestCommon):
             mock_notification_method.assert_not_called()
         with (
             _patch_caldav_with_events_from_ics(
-                ics_path, user3, last_modified=datetime.now(UTC)
+                ics_path, user3, last_modified=datetime.now(timezone.utc)
             ),
             patch(notification_method) as mock_notification_method,
         ):
@@ -321,7 +321,7 @@ class TestCalendarEvent(TransactionCase, CaldavTestCommon):
             mock_notification_method.assert_not_called()
         with (
             _patch_caldav_with_events_from_ics(
-                ics_path, user1, last_modified=datetime.now(UTC)
+                ics_path, user1, last_modified=datetime.now(timezone.utc)
             ),
             patch(notification_method) as mock_notification_method,
         ):
