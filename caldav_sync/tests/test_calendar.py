@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +9,7 @@ import icalendar
 from freezegun import freeze_time
 
 from odoo.tests import TransactionCase, tagged
+from odoo.tools.misc import mute_logger
 
 from .common import CaldavTestCommon
 
@@ -56,6 +57,13 @@ def _futurize_events(ical_events):
             if subcomponent.name == "VEVENT":
                 start = subcomponent.get("dtstart") and subcomponent.decoded("dtstart")
                 end = subcomponent.get("dtend") and subcomponent.decoded("dtend")
+                # Handle events without DTEND (endless recurring)
+                if end is None:
+                    # Default duration: 1 hour for timed events, 1 day for all-day
+                    if isinstance(start, datetime):
+                        end = start + timedelta(hours=1)
+                    else:
+                        end = start + timedelta(days=1)
                 duration = end - start
                 subcomponent["dtstart"] = icalendar.vDDDTypes(datetime.now())
                 subcomponent["dtend"] = icalendar.vDDDTypes(datetime.now() + duration)
@@ -290,3 +298,69 @@ class TestCalendarEvent(TransactionCase, CaldavTestCommon):
         self.assertIn(user3.partner_id, event.partner_ids)
         self.assertNotIn(user2.partner_id, event.partner_ids)
         self.assertEqual(len(event.attendee_ids), 2)
+
+    def test_endless_recurring_event_no_dtend_timed(self):
+        """Unit test: endless recurring event without DTEND should get stop=start+1h."""
+        user = self.user_1
+        ics_path = _get_ics_path("test_endless_recurring.ics")
+        ical_events = _load_ical_events(ics_path)
+        # Get the VEVENT component (walk returns all VEVENTs)
+        vevents = list(ical_events[0].walk("VEVENT"))
+        component = vevents[0]
+
+        # Call _get_values_from_ical_component directly
+        values = self.env["calendar.event"]._get_values_from_ical_component(
+            component, user, for_creation=True
+        )
+
+        # Verify that stop is set to start + 1 hour (timed event default)
+        expected_stop = values["start"] + timedelta(hours=1)
+        self.assertEqual(values["stop"], expected_stop)
+
+    def test_endless_recurring_event_no_dtend_allday(self):
+        """All-day endless recurring event without DTEND gets stop=start+1day."""
+        user = self.user_1
+
+        # Create an all-day event component (date only, not datetime)
+        cal = icalendar.Calendar()
+        event = icalendar.Event()
+        event.add("uid", "allday-endless@example.com")
+        event.add("summary", "All-day endless recurring")
+        event.add("dtstart", date(2025, 3, 17))  # date only = all-day
+        event.add("rrule", {"freq": "weekly", "byday": ["mo", "we", "fr"]})
+        cal.add_component(event)
+
+        # Get VEVENT via walk
+        vevents = list(cal.walk("VEVENT"))
+        component = vevents[0]
+
+        values = self.env["calendar.event"]._get_values_from_ical_component(
+            component, user, for_creation=True
+        )
+
+        # Verify that stop is set to start + 1 day (all-day event default)
+        expected_stop = values["start"] + timedelta(days=1)
+        self.assertEqual(values["stop"], expected_stop)
+
+    @mute_logger("odoo.addons.caldav_sync.models.calendar_event")
+    def test_endless_recurring_from_server_create(self):
+        """Integration test: sync an endless recurring event from CalDAV server."""
+        user = self.user_1
+        ics_path = _get_ics_path("test_endless_recurring.ics")
+        with _patch_caldav_with_events_from_ics(ics_path, user):
+            self.env["calendar.event"].poll_caldav_server()
+
+        # Verify the event was created (search only events for this user)
+        event = self.env["calendar.event"].search(
+            [
+                ("caldav_uid", "=", "endless-recurring-test@example.com"),
+                ("user_id", "=", user.id),
+            ],
+            limit=1,
+        )
+        self.assertEqual(len(event), 1, "Expected exactly one event to be created")
+        # Verify stop was set (not NULL)
+        self.assertIsNotNone(event.stop)
+        # Verify it's approximately 1 hour after start for timed events
+        expected_stop = event.start + timedelta(hours=1)
+        self.assertEqual(event.stop, expected_stop)
