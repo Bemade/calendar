@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import DEFAULT, MagicMock, patch
 
@@ -374,3 +374,90 @@ class TestCalendarEvent(TransactionCase, CaldavTestCommon):
             mock_calendar.events.return_value = []
             mock_calendar.event_by_uid.return_value = mock_event_by_uid
             yield mock_client, mock_calendar
+
+    def test_endless_recurring_event_no_dtend_timed(self):
+        """Endless recurring timed events (no DTEND) should sync without error.
+
+        Thunderbird, Nextcloud, and other CalDAV clients omit DTEND on
+        recurring events that have no end date (no UNTIL/COUNT on RRULE).
+        RFC 5545 §3.6.1 allows this (zero-duration event), but Odoo's
+        calendar.event.stop field is NOT NULL, so we must supply a fallback.
+        Expected: stop = start + 1 hour for timed events.
+        """
+        user = self.user_1
+        ical_text = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN
+BEGIN:VEVENT
+UID:ENDLESS-TIMED-0001@test
+SUMMARY:Endless Weekly Standup
+DTSTART:20300101T100000Z
+RRULE:FREQ=WEEKLY;BYDAY=TU
+DTSTAMP:20241007T195255Z
+LAST-MODIFIED:20241007T195252Z
+CREATED:20241007T195223Z
+END:VEVENT
+END:VCALENDAR
+"""
+        cal = icalendar.Calendar.from_ical(ical_text)
+        component = next(
+            c for c in cal.walk() if c.name == "VEVENT"
+        )
+        values = self.env["calendar.event"]._get_values_from_ical_component(
+            component, user, for_creation=True
+        )
+        self.assertIsNotNone(values["stop"], "stop must not be None for timed event without DTEND")
+        expected_stop = datetime(2030, 1, 1, 11, 0, 0)  # start + 1 hour (UTC, tzinfo stripped)
+        self.assertEqual(values["stop"], expected_stop)
+
+    def test_endless_recurring_event_no_dtend_allday(self):
+        """Endless recurring all-day events (no DTEND) should sync without error.
+
+        All-day events use DATE values for DTSTART. When DTEND is absent,
+        we fall back to start + 1 day to satisfy the NOT NULL constraint.
+        """
+        user = self.user_1
+        ical_text = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN
+BEGIN:VEVENT
+UID:ENDLESS-ALLDAY-0001@test
+SUMMARY:Endless Weekly All-Day Event
+DTSTART;VALUE=DATE:20300101
+RRULE:FREQ=WEEKLY;BYDAY=TU
+DTSTAMP:20241007T195255Z
+LAST-MODIFIED:20241007T195252Z
+CREATED:20241007T195223Z
+END:VEVENT
+END:VCALENDAR
+"""
+        cal = icalendar.Calendar.from_ical(ical_text)
+        component = next(
+            c for c in cal.walk() if c.name == "VEVENT"
+        )
+        values = self.env["calendar.event"]._get_values_from_ical_component(
+            component, user, for_creation=True
+        )
+        self.assertIsNotNone(values["stop"], "stop must not be None for all-day event without DTEND")
+        expected_stop = date(2030, 1, 2)  # start + 1 day
+        self.assertEqual(values["stop"], expected_stop)
+
+    def test_endless_recurring_from_server_create(self):
+        """Full sync test: endless recurring event (no DTEND) creates events.
+
+        Uses the test_endless_recurring.ics sample which has RRULE but no
+        DTEND/UNTIL. The _futurize_events helper adds DTEND for the sync
+        path, so this tests the complete integration. The unit tests above
+        (no_dtend_timed / no_dtend_allday) cover the fallback logic directly.
+        """
+        user = self.user_1
+        ics_path = _get_ics_path("test_endless_recurring.ics")
+        with _patch_caldav_with_events_from_ics(ics_path, user):
+            current_events = self.env["calendar.event"].search([])
+            self.env["calendar.event"].poll_caldav_server()
+            events_after_sync = self.env["calendar.event"].search([])
+            new_events = events_after_sync - current_events
+            self.assertGreater(
+                len(new_events), 0,
+                "Endless recurring event (no DTEND) should create at least one event"
+            )
