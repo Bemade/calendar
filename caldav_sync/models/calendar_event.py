@@ -1,7 +1,7 @@
 import logging
 import re
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import caldav
@@ -943,6 +943,19 @@ class CalendarEvent(models.Model):
         end = component.get("dtend") and component.decoded("dtend")
         if isinstance(end, datetime):
             end = end.astimezone(utc).replace(tzinfo=None)
+        elif end is None:
+            # DTEND is missing — common in endless recurring events created by
+            # Thunderbird, Nextcloud, etc. RFC 5545 §3.6.1 says that if DTEND
+            # is absent the event has zero duration, but Odoo's stop field is
+            # NOT NULL, so we fall back to a sensible default:
+            #   • timed event  → start + 1 hour
+            #   • all-day event (date only) → start + 1 day
+            if isinstance(start, datetime):
+                end = start + timedelta(hours=1)
+            elif isinstance(start, date):
+                end = start + timedelta(days=1)
+            else:
+                end = start
 
         # Get attendees regardless of creation/update
         attendee_ids = self._get_attendee_partners(component, user.partner_id.email)
